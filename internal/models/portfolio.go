@@ -27,3 +27,9 @@ type RebalanceRequest struct {
 	UserID         string `json:"user_id"`
 	AllocationHash string `json:"allocation_hash"` // Hash of the updated allocation json from the provider
 }
+
+type APIResponse struct {
+	Success bool        `json:"success"`
+	Data    interface{} `json:"data,omitempty"`
+	Message string      `json:"message,omitempty"`
+}

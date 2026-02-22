@@ -19,38 +19,66 @@ import (
 //	    "allocation": {"stocks": 60, "bonds": 30, "gold": 10}
 //	}
 func HandlePortfolio(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Only allow POST
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Method not allowed",
+		})
 		return
 	}
 
+	// Decode request body
 	var p models.Portfolio
-	err := json.NewDecoder(r.Body).Decode(&p)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Invalid request body",
+		})
 		return
 	}
 
 	// Validate UserID and Allocation
 	if err := models.ValidateUserAndAllocation(p.UserID, p.Allocation); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 
 	if err := models.ValidatePercentage(p.Allocation); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 
 	// Save to Elasticsearch
 	if err := storage.SavePortfolio(r.Context(), &p); err != nil {
 		log.Printf("Failed to save portfolio: %v", err)
-		http.Error(w, "Failed to save portfolio", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Failed to save portfolio",
+		})
 		return
 	}
 
+	// Success response
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(p)
+	json.NewEncoder(w).Encode(models.APIResponse{
+		Success: true,
+		Data:    p,
+		Message: "Portfolio request accepted",
+	})
 }
 
 // HandleRebalance handles portfolio rebalance requests from 3rd party provider (feel free to update the request parameter/model)
@@ -61,50 +89,80 @@ func HandlePortfolio(w http.ResponseWriter, r *http.Request) {
 //	    "new_allocation": {"stocks": 70, "bonds": 20, "gold": 10}
 //	}
 func HandleRebalance(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Only allow POST
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Method not allowed",
+		})
 		return
 	}
 
+	// Decode request body
 	var req models.UpdatedPortfolio
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Invalid request body",
+		})
 		return
 	}
 
 	// Validate UserID and Allocation
-	if err = models.ValidateUserAndAllocation(req.UserID, req.NewAllocation); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := models.ValidateUserAndAllocation(req.UserID, req.NewAllocation); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 
-	if err = models.ValidatePercentage(req.NewAllocation); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := models.ValidatePercentage(req.NewAllocation); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: err.Error(),
+		})
 		return
 	}
 
-	//get current allocation from elasticsearch
+	// Get current allocation from Elasticsearch
 	p, err := storage.GetPortfolio(r.Context(), req.UserID)
 	if err != nil {
-		// Check if it’s a not-found error
 		if errors.Is(err, storage.ErrUserNotFound) {
-			http.Error(w, "User not found", http.StatusNotFound)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(models.APIResponse{
+				Success: false,
+				Message: "User not found",
+			})
 			return
 		}
 
 		log.Printf("Failed to get current portfolio: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Internal server error",
+		})
 		return
 	}
 
 	log.Println("HandleRebalance==", req)
 
-	//check canonical hash
+	// Check canonical hash
 	newHash := utils.CanonicalHash(req.NewAllocation)
 	currentHash := utils.CanonicalHash(p.Allocation)
 	if newHash == currentHash {
-		http.Error(w, "New allocation is the same as current allocation", http.StatusBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "New allocation is the same as current allocation",
+		})
 		return
 	}
 
@@ -114,20 +172,34 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 		NewAllocation:     req.NewAllocation,
 		CurrentAllocation: p.Allocation,
 	}
-	payload, err := json.Marshal(rbk)
 
+	payload, err := json.Marshal(rbk)
 	if err != nil {
 		log.Printf("Failed to marshal request: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Internal server error",
+		})
 		return
 	}
 
 	// Publish to Kafka
 	if err := kafka.PublishMessage(r.Context(), payload); err != nil {
 		log.Printf("Failed to publish message to Kafka: %v", err)
-		http.Error(w, "Failed to queue rebalance request", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(models.APIResponse{
+			Success: false,
+			Message: "Failed to queue rebalance request",
+		})
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// Success response
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(models.APIResponse{
+		Success: true,
+		Data:    req,
+		Message: "Rebalance request accepted",
+	})
 }
