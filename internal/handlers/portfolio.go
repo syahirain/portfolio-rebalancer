@@ -11,6 +11,20 @@ import (
 	"portfolio-rebalancer/internal/utils"
 )
 
+var (
+	// savePortfolio is a function variable that points to storage.SavePortfolio.
+	// It is used to allow mocking in unit tests.
+	savePortfolio = storage.SavePortfolio
+
+	// getPortfolio is a function variable that points to storage.GetPortfolio.
+	// It is used to allow mocking in unit tests.
+	getPortfolio = storage.GetPortfolio
+
+	// publishMessage is a function variable that points to kafka.PublishMessage.
+	// It is used to allow mocking in unit tests.
+	publishMessage = kafka.PublishMessage
+)
+
 // HandlePortfolio handles new portfolio creation requests (feel free to update the request parameter/model)
 // Sample Request (POST /portfolio):
 //
@@ -62,7 +76,7 @@ func HandlePortfolio(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save to Elasticsearch
-	if err := storage.SavePortfolio(r.Context(), &p); err != nil {
+	if err := savePortfolio(r.Context(), &p); err != nil {
 		log.Printf("Failed to save portfolio: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(models.APIResponse{
@@ -132,7 +146,7 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get current allocation from Elasticsearch
-	p, err := storage.GetPortfolio(r.Context(), req.UserID)
+	p, err := getPortfolio(r.Context(), req.UserID)
 	if err != nil {
 		if errors.Is(err, storage.ErrUserNotFound) {
 			w.WriteHeader(http.StatusNotFound)
@@ -185,7 +199,7 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Publish to Kafka
-	if err := kafka.PublishMessage(r.Context(), payload); err != nil {
+	if err := publishMessage(r.Context(), payload); err != nil {
 		log.Printf("Failed to publish message to Kafka: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(models.APIResponse{

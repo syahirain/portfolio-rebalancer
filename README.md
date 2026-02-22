@@ -199,3 +199,27 @@ The system is designed with several fault tolerance mechanisms:
     *   `Success`: Boolean indicating request success.
     *   `Data`: Payload data (optional).
     *   `Message`: Error message or status description (optional).
+
+## Unit Tests
+
+The project includes unit tests covering core logic, API handlers, and utility functions.
+
+### Coverage
+
+*   **Handlers (`internal/handlers`)**: Tests the HTTP API endpoints, including input validation, success scenarios, and error handling.
+*   **Services (`internal/services`)**: Tests the core rebalancing algorithm to ensure correct buy/sell calculations based on target allocations.
+*   **Utils (`internal/utils`)**: Verifies helper functions like canonical hash generation for consistent data processing.
+
+### Running Tests
+
+To run all unit tests in the project, execute:
+
+```bash
+go test ./...
+```
+
+For verbose output:
+
+```bash
+go test -v ./...
+```
