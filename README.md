@@ -1,99 +1,201 @@
 # Portfolio Rebalancer
 
-This is a take-home assignment to build backend APIs for managing and rebalancing user portfolios.
+A distributed system for managing and rebalancing investment portfolios. This project demonstrates a microservices architecture using Go, Kafka, and Elasticsearch.
 
+## Architecture
+
+The system consists of two main services decoupled by a message broker:
+
+1.  **API Service**:
+    *   Exposes HTTP endpoints for portfolio management.
+    *   Validates user input and portfolio allocations.
+    *   Persists portfolio state to **Elasticsearch**.
+    *   Publishes rebalancing requests to a **Kafka** topic.
+
+2.  **Consumer Service**:
+    *   Consumes rebalancing requests from **Kafka**.
+    *   Calculates the difference between current and new allocations.
+    *   Generates necessary transactions to achieve the target allocation.
+    *   Stores rebalancing transactions in **Elasticsearch**.
+
+3.  **Infrastructure**:
+    *   **Kafka**: Ensures asynchronous and reliable communication between the API and Consumer services.
+    *   **Elasticsearch**: Serves as the primary data store for portfolios and transactions.
+    *   **Zookeeper**: Manages the Kafka cluster.
 
 ## Tech Stack
 
-- Go
-- Elasticsearch (Feel free to use any other database or an in-memory alternative)
-- Kafka (Feel free to use any other messaging system if needed)
-- Docker
+*   **Language**: Go (Golang)
+*   **Messaging**: Apache Kafka (using `segmentio/kafka-go`)
+*   **Database**: Elasticsearch (using `elastic/go-elasticsearch`)
+*   **Containerization**: Docker & Docker Compose
 
+## Getting Started
 
-## Running the Project
+### Prerequisites
 
+*   Docker
+*   Docker Compose
+
+### Installation & Running
+
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/your-username/portfolio-rebalancer.git
+    cd portfolio-rebalancer
+    ```
+
+2.  Start the services using Docker Compose:
+    ```bash
+    docker-compose up --build
+    ```
+
+    This command will start:
+    *   Zookeeper
+    *   Kafka
+    *   Elasticsearch
+    *   API Service (exposed on port 8080)
+    *   Consumer Service
+
+3.  The API will be available at `http://localhost:8080`.
+
+## API Reference
+
+### 1. Create Portfolio
+
+Creates a new investment portfolio for a user.
+
+*   **Endpoint**: `POST /portfolio`
+*   **Content-Type**: `application/json`
+*   **Body Parameters**:
+    *   `user_id` (string): Unique identifier for the user.
+    *   `allocation` (object): Key-value pairs of asset names and their percentage allocation. Percentages must sum to 100.
+
+**Example Request:**
+
+```json
+{
+    "user_id": "1",
+    "allocation": {
+        "stocks": 60,
+        "bonds": 30,
+        "gold": 10
+    }
+}
 ```
-docker compose build
-docker compose up
+
+**Example Response (Success):**
+
+```json
+{
+    "success": true,
+    "data": {
+        "user_id": "1",
+        "allocation": {
+            "stocks": 60,
+            "bonds": 30,
+            "gold": 10
+        }
+    },
+    "message": "Portfolio request accepted"
+}
 ```
+
+**Example Response (Error):**
+
+```json
+{
+    "success": false,
+    "message": "allocation percentages must sum to 100"
+}
+```
+
+### 2. Trigger Rebalance
+
+Triggers a rebalancing operation to adjust the portfolio to a new target allocation.
+
+*   **Endpoint**: `POST /rebalance`
+*   **Content-Type**: `application/json`
+*   **Body Parameters**:
+    *   `user_id` (string): Unique identifier for the user.
+    *   `new_allocation` (object): The desired target allocation.
+
+**Example Request:**
+
+```json
+{
+    "user_id": "1",
+    "new_allocation": {
+        "stocks": 70,
+        "bonds": 20,
+        "gold": 10
+    }
+}
+```
+
+**Example Response (Success):**
+
+```json
+{
+    "success": true,
+    "data": {
+        "user_id": "1",
+        "new_allocation": {
+            "stocks": 70,
+            "bonds": 20,
+            "gold": 10
+        }
+    },
+    "message": "Rebalance request accepted"
+}
+```
+
+**Example Response (Error):**
+
+```json
+{
+    "success": false,
+    "message": "New allocation is the same as current allocation"
+}
+```
+
+## Fault Tolerance
+
+The system is designed with several fault tolerance mechanisms:
+
+*   **Asynchronous Processing**: Using Kafka decouples the request ingestion from processing, allowing the system to handle bursts of traffic without overwhelming the consumer.
+*   **Graceful Shutdown**: Both API and Consumer services handle OS signals (SIGINT, SIGTERM) to ensure clean shutdowns (e.g., closing connections, finishing in-flight requests).
+*   **Retry Mechanism**: The Consumer service implements exponential backoff (up to 5 attempts) when saving transactions to Elasticsearch to handle transient failures.
+*   **Idempotency**: The system checks for duplicate rebalance requests using allocation hashes to prevent redundant processing.
+*   **Container Recovery**: Docker Compose is configured with `restart: on-failure` to automatically restart services if they crash.
 
 
 ## Models
 
-- Portfolio 
-        - `UserID` field is a unique user identifier in our system
-        - `Allocation` field represents the percentage of the user's total portfolio or cash distribution across different asset classes. 
-            Eg: {"stocks": 60, "bonds": 30, "gold": 10}.
-            Note: This means 60% of the user's portfolio is allocated to stocks, 30% to bonds, and 10% to gold
-            
-- UpdatedPortfolio 
-        - `UserID` is the user's unique ID
-        - `NewAllocation` is the new allocation of user portfolio in %.
+*   **Portfolio**
+    *   `UserID`: Unique user identifier.
+    *   `Allocation`: Map of asset classes to their percentage allocation (e.g., `{"stocks": 60, "bonds": 30, "gold": 10}`).
 
-- RebalanceTransaction
-        - `userID` is the user's unique ID
-        - `Action` is the type of transaction (BUY/SELL)
-        - `Asset` is the type of user asset to be transferred (eg: stocks, bonds, gold etc.)
-        - `RebalancePercent` is the percentage of the asset transferred
+*   **UpdatedPortfolio**
+    *   `UserID`: Unique user identifier.
+    *   `NewAllocation`: The updated allocation provided by the 3rd party provider.
 
-- Feel free to edit/add models
+*   **RebalancePortfolioKafka**
+    *   `UserID`: Unique user identifier.
+    *   `NewAllocation`: The target allocation.
+    *   `CurrentAllocation`: The user's original allocation before market changes.
 
+*   **RebalanceTransaction**
+    *   `UserID`: Unique user identifier.
+    *   `Action`: Type of transaction (`BUY` or `SELL`).
+    *   `Asset`: The asset class (e.g., `stocks`, `bonds`).
+    *   `RebalancePercent`: The percentage of the asset to buy or sell.
 
-## APIs
-- /portfolio : This takes in userId and current user allocation. This will api will be used to create users in our system along with their portfolio allocation.
+*   **RebalanceRequest**
+    *   `UserID`: Unique user identifier.
+    *   `AllocationHash`: Hash of the updated allocation JSON (used for idempotency).
 
-- /rebalance : This is the API that simulates a third-party provider, which calculates a user's portfolio allocation based on market changes and returns an updated allocation. For the current task, we will manually call this API to mock the third-party interaction.
-
-
-- Feel free to edit/add APIs
-
-
-## TODO
-
-- Complete the `/portfolio` API
-    - Accept a new user's portfolio details via a POST request.
-    - Persist the portfolio in Elasticsearch.
-
-- Complete the `/rebalance` API
-    - Accept a user's updated portfolio based on market conditions via a POST request.
-    - Maintain the user's original allocation percentages for reference.
-    - Calculate the transactions needed to rebalance the user's current portfolio allocation percentage back to their original allocation percentage.
-    - Save the RebalanceTransaction in Elasticsearch.
-
-- Assuming we could get multiple rebalance api calls from the provider, we need to ensure our system can handle load and is fault tolerant(could be supported by adding queue and retries).
-
-- Write a README
-
-- Feel free to add further capabilities.
-
-
-## Example
-
-- `/portfolio` API creates a user with ID = 1 and Allocation = {"stocks": 60, "bonds": 30, "gold": 10}
-    Note: here the allocation is 60% stocks, 30% bonds and 10% gold
-
-- `/rebalance` API is called with inputs
-    ID = 1
-    NewAllocation = {"stocks": 70, "bonds": 20, "gold": 10}
-    [This is how much the user's portfolio has moved due to market conditions]
-
-- We need to calculate and save the RebalanceTransaction to maintain 60% stocks, 30% bonds and 10% gold.
-
-    Transaction 1: 
-            UserID = "1"
-	        Sell 10% of stocks
-
-    Transaction 2: 
-            UserID = "1"
-	        Buy 10% of bonds
-
-
-## Evaluation Criteria
-
-- Code quality and structure
-- Logical correctness
-- Fault tolerance
-- Extensibility and Scalablility
-- Test coverage
-- Optional: Error handling and edge cases.
+*   **APIResponse**
+    *   `Success`: Boolean indicating request success.
+    *   `Data`: Payload data (optional).
+    *   `Message`: Error message or status description (optional).
