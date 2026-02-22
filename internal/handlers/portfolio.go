@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"portfolio-rebalancer/internal/kafka"
 	"portfolio-rebalancer/internal/models"
 	"portfolio-rebalancer/internal/storage"
+	"sort"
 )
 
 // HandlePortfolio handles new portfolio creation requests (feel free to update the request parameter/model)
@@ -82,21 +86,38 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user exists in Elasticsearch
-	if _, err = storage.GetPortfolio(r.Context(), req.UserID); err != nil {
-		if err.Error() == "user not found" {
+	//get current allocation from elasticsearch
+	p, err := storage.GetPortfolio(r.Context(), req.UserID)
+	if err != nil {
+		// Check if it’s a not-found error
+		if errors.Is(err, storage.ErrUserNotFound) {
 			http.Error(w, "User not found", http.StatusNotFound)
-		} else {
-			log.Printf("Failed to check user existence: %v", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
 		}
+
+		log.Printf("Failed to get current portfolio: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
 	log.Println("HandleRebalance==", req)
 
+	//check canonical hash
+	newHash := canonicalHash(req.NewAllocation)
+	currentHash := canonicalHash(p.Allocation)
+	if newHash == currentHash {
+		http.Error(w, "New allocation is the same as current allocation", http.StatusBadRequest)
+		return
+	}
+
 	// Marshal request to JSON for Kafka
-	payload, err := json.Marshal(req)
+	rbk := models.RebalancePortfolioKafka{
+		UserID:            req.UserID,
+		NewAllocation:     req.NewAllocation,
+		CurrentAllocation: p.Allocation,
+	}
+	payload, err := json.Marshal(rbk)
+
 	if err != nil {
 		log.Printf("Failed to marshal request: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -111,4 +132,26 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func canonicalHash(allocation map[string]float64) string {
+	// Sort keys
+	keys := make([]string, 0, len(allocation))
+	for k := range allocation {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Build a canonical map
+	canonical := make(map[string]float64, len(allocation))
+	for _, k := range keys {
+		canonical[k] = allocation[k]
+	}
+
+	// Marshal to JSON
+	bytes, _ := json.Marshal(canonical)
+
+	// Compute SHA256
+	hash := sha256.Sum256(bytes)
+	return fmt.Sprintf("%x", hash)
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"portfolio-rebalancer/internal/kafka"
+	"portfolio-rebalancer/internal/storage"
 )
 
 func main() {
@@ -20,6 +21,11 @@ func main() {
 		log.Println("Shutting down consumer...")
 		cancel()
 	}()
+
+	// Initialize Elasticsearch
+	if err := storage.InitElastic(); err != nil {
+		log.Fatalf("Failed to initialize Elasticsearch: %v", err)
+	}
 
 	// Optionally, ensure Kafka topic exists
 	if err := kafka.InitKafka(); err != nil {
