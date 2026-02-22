@@ -8,8 +8,9 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -o /portfolio-rebalancer ./cmd/api
+RUN go build -o /api ./cmd/api
+RUN go build -o /consumer ./cmd/consumer
 
 EXPOSE 8080
 
-CMD ["/portfolio-rebalancer"]
+CMD ["/api"]
