@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"portfolio-rebalancer/internal/kafka"
 	"portfolio-rebalancer/internal/models"
-	"portfolio-rebalancer/internal/storage" // Added import
+	"portfolio-rebalancer/internal/storage"
 )
 
 // HandlePortfolio handles new portfolio creation requests (feel free to update the request parameter/model)
@@ -28,29 +29,14 @@ func HandlePortfolio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate UserID
-	if p.UserID == "" {
-		http.Error(w, "User ID is required", http.StatusBadRequest)
+	// Validate UserID and Allocation
+	if err := models.ValidateUserAndAllocation(p.UserID, p.Allocation); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Validate Allocation
-	if len(p.Allocation) == 0 {
-		http.Error(w, "Allocation is required", http.StatusBadRequest)
-		return
-	}
-
-	var totalPercentage float64
-	for _, percentage := range p.Allocation {
-		if percentage < 0 {
-			http.Error(w, "Percentage cannot be negative", http.StatusBadRequest)
-			return
-		}
-		totalPercentage += percentage
-	}
-
-	if totalPercentage != 100 {
-		http.Error(w, "Total allocation percentage must be 100%", http.StatusBadRequest)
+	if err := models.ValidatePercentage(p.Allocation); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -79,11 +65,50 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req models.UpdatedPortfolio
-	json.NewDecoder(r.Body).Decode(&req)
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate UserID and Allocation
+	if err = models.ValidateUserAndAllocation(req.UserID, req.NewAllocation); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err = models.ValidatePercentage(req.NewAllocation); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Check if user exists in Elasticsearch
+	if _, err = storage.GetPortfolio(r.Context(), req.UserID); err != nil {
+		if err.Error() == "user not found" {
+			http.Error(w, "User not found", http.StatusNotFound)
+		} else {
+			log.Printf("Failed to check user existence: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+		return
+	}
 
 	log.Println("HandleRebalance==", req)
 
-	// TODO: Add Logic here
+	// Marshal request to JSON for Kafka
+	payload, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("Failed to marshal request: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Publish to Kafka
+	if err := kafka.PublishMessage(r.Context(), payload); err != nil {
+		log.Printf("Failed to publish message to Kafka: %v", err)
+		http.Error(w, "Failed to queue rebalance request", http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 }
