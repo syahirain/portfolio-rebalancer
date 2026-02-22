@@ -26,5 +26,4 @@ type RebalanceTransaction struct {
 type RebalanceRequest struct {
 	UserID         string `json:"user_id"`
 	AllocationHash string `json:"allocation_hash"` // Hash of the updated allocation json from the provider
-	Status         string `json:"status"`          // "PENDING", "COMPLETED", "FAILED"
 }

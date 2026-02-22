@@ -1,16 +1,14 @@
 package handlers
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"portfolio-rebalancer/internal/kafka"
 	"portfolio-rebalancer/internal/models"
 	"portfolio-rebalancer/internal/storage"
-	"sort"
+	"portfolio-rebalancer/internal/utils"
 )
 
 // HandlePortfolio handles new portfolio creation requests (feel free to update the request parameter/model)
@@ -45,7 +43,7 @@ func HandlePortfolio(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save to Elasticsearch
-	if err := storage.SavePortfolio(r.Context(), p); err != nil {
+	if err := storage.SavePortfolio(r.Context(), &p); err != nil {
 		log.Printf("Failed to save portfolio: %v", err)
 		http.Error(w, "Failed to save portfolio", http.StatusInternalServerError)
 		return
@@ -103,8 +101,8 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 	log.Println("HandleRebalance==", req)
 
 	//check canonical hash
-	newHash := canonicalHash(req.NewAllocation)
-	currentHash := canonicalHash(p.Allocation)
+	newHash := utils.CanonicalHash(req.NewAllocation)
+	currentHash := utils.CanonicalHash(p.Allocation)
 	if newHash == currentHash {
 		http.Error(w, "New allocation is the same as current allocation", http.StatusBadRequest)
 		return
@@ -132,26 +130,4 @@ func HandleRebalance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-}
-
-func canonicalHash(allocation map[string]float64) string {
-	// Sort keys
-	keys := make([]string, 0, len(allocation))
-	for k := range allocation {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	// Build a canonical map
-	canonical := make(map[string]float64, len(allocation))
-	for _, k := range keys {
-		canonical[k] = allocation[k]
-	}
-
-	// Marshal to JSON
-	bytes, _ := json.Marshal(canonical)
-
-	// Compute SHA256
-	hash := sha256.Sum256(bytes)
-	return fmt.Sprintf("%x", hash)
 }

@@ -17,6 +17,7 @@ import (
 
 var esClient *elasticsearch.Client
 var ErrUserNotFound = errors.New("user not found")
+var ErrRequestNotFound = errors.New("rebalance request not found")
 
 // InitElastic initializes elasticsearch connection with retry logic
 func InitElastic() error {
@@ -50,7 +51,7 @@ func InitElastic() error {
 	return fmt.Errorf("failed to connect to Elasticsearch after retries: %w", err)
 }
 
-func SavePortfolio(ctx context.Context, p models.Portfolio) error {
+func SavePortfolio(ctx context.Context, p *models.Portfolio) error {
 	body, err := json.Marshal(p)
 	if err != nil {
 		return err
@@ -92,6 +93,26 @@ func GetPortfolio(ctx context.Context, userID string) (*models.Portfolio, error)
 	return &esResp.Source, nil
 }
 
+func SaveRebalanceRequest(ctx context.Context, p *models.RebalanceRequest) error {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+
+	res, err := esClient.Index("rebalance_requests", bytes.NewReader(body), esClient.Index.WithDocumentID(p.UserID))
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return fmt.Errorf("error saving rebalance request: %s", res.String())
+	}
+
+	log.Printf("Rebalance request saved for user %s", p.UserID)
+	return nil
+}
+
 func GetRebalanceRequest(ctx context.Context, userID string) (*models.RebalanceRequest, error) {
 	res, err := esClient.Get("rebalance_requests", userID)
 	if err != nil {
@@ -100,7 +121,7 @@ func GetRebalanceRequest(ctx context.Context, userID string) (*models.RebalanceR
 	defer res.Body.Close()
 
 	if res.IsError() {
-		return nil, ErrUserNotFound
+		return nil, ErrRequestNotFound
 	}
 
 	var esResp struct {
@@ -114,25 +135,42 @@ func GetRebalanceRequest(ctx context.Context, userID string) (*models.RebalanceR
 	return &esResp.Source, nil
 }
 
-func SaveRebalanceTransaction(ctx context.Context, tx models.RebalanceTransaction) error {
-	body, err := json.Marshal(tx)
-	if err != nil {
-		return err
+func SaveRebalanceTransactions(ctx context.Context, txs []models.RebalanceTransaction) error {
+	if len(txs) == 0 {
+		return nil
 	}
 
-	res, err := esClient.Index(
-		"rebalance_transactions",
-		bytes.NewReader(body),
-	)
+	var buf bytes.Buffer
+	for _, tx := range txs {
+		meta := []byte(fmt.Sprintf(`{ "index" : { "_index" : "rebalance_transactions" } }%s`, "\n"))
+		data, err := json.Marshal(tx)
+		if err != nil {
+			return err
+		}
+		data = append(data, '\n')
+		buf.Write(meta)
+		buf.Write(data)
+	}
+
+	res, err := esClient.Bulk(bytes.NewReader(buf.Bytes()), esClient.Bulk.WithContext(ctx))
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
-		return fmt.Errorf("error saving rebalance transaction: %s", res.String())
+		return fmt.Errorf("error saving rebalance transactions: %s", res.String())
 	}
 
-	log.Printf("Rebalance transaction saved for user %s", tx.UserID)
+	var raw map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
+		return fmt.Errorf("failure to to parse response body: %s", err)
+	}
+
+	if hasErrors, ok := raw["errors"].(bool); ok && hasErrors {
+		return fmt.Errorf("bulk request contained errors: %v", raw)
+	}
+
+	log.Printf("Saved %d rebalance transactions for user %s", len(txs), txs[0].UserID)
 	return nil
 }
