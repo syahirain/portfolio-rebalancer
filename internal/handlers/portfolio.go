@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"portfolio-rebalancer/internal/models"
+	"portfolio-rebalancer/internal/storage" // Added import
 )
 
 // HandlePortfolio handles new portfolio creation requests (feel free to update the request parameter/model)
@@ -27,7 +28,38 @@ func HandlePortfolio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Add Logic here
+	// Validate UserID
+	if p.UserID == "" {
+		http.Error(w, "User ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Allocation
+	if len(p.Allocation) == 0 {
+		http.Error(w, "Allocation is required", http.StatusBadRequest)
+		return
+	}
+
+	var totalPercentage float64
+	for _, percentage := range p.Allocation {
+		if percentage < 0 {
+			http.Error(w, "Percentage cannot be negative", http.StatusBadRequest)
+			return
+		}
+		totalPercentage += percentage
+	}
+
+	if totalPercentage != 100 {
+		http.Error(w, "Total allocation percentage must be 100%", http.StatusBadRequest)
+		return
+	}
+
+	// Save to Elasticsearch
+	if err := storage.SavePortfolio(r.Context(), p); err != nil {
+		log.Printf("Failed to save portfolio: %v", err)
+		http.Error(w, "Failed to save portfolio", http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(p)
